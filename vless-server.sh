@@ -13011,12 +13011,12 @@ test_routing() {
 
 # 访问限制预设
 ACCESS_RESTRICT_CN_DOMAINS="geosite:cn,geoip:cn"
-ACCESS_RESTRICT_BTPT_DOMAINS="geosite:category-pt,geosite:tracker,geosite:public-tracker,geosite:private-tracker,bittorrent"
+ACCESS_RESTRICT_BTPT_DOMAINS="geosite:tracker,geosite:public-tracker,geosite:private-tracker"
 
 access_restriction_enabled() {
     [[ ! -f "$DB_FILE" ]] && return 1
     local count
-    count=$(jq '[.routing_rules[]? | select(.id == "restrict-cn-geosite" or .id == "restrict-cn-geoip" or .id == "restrict-btpt-trackers" or .id == "restrict-btpt-pt" or .type == "restrict-cn" or .type == "restrict-btpt")] | length' "$DB_FILE" 2>/dev/null)
+    count=$(jq '[.routing_rules[]? | select(.id == "restrict-cn-geosite" or .id == "restrict-cn-geoip" or .id == "restrict-btpt-tracker" or .id == "restrict-btpt-public-tracker" or .id == "restrict-btpt-private-tracker" or .type == "restrict-cn" or .type == "restrict-btpt")] | length' "$DB_FILE" 2>/dev/null)
     [[ "${count:-0}" -gt 0 ]]
 }
 
@@ -13026,11 +13026,33 @@ _enable_access_rule() {
     db_add_routing_rule "$type" "block" "$domains" "as_is"
 }
 
+cleanup_legacy_access_restriction_rules() {
+    [[ ! -f "$DB_FILE" ]] && return 0
+    local tmp=$(mktemp)
+    jq '.routing_rules = [.routing_rules[]? | select(
+        .id != "restrict-cn-geosite" and
+        .id != "restrict-cn-geoip" and
+        .id != "restrict-btpt-tracker" and
+        .id != "restrict-btpt-public-tracker" and
+        .id != "restrict-btpt-private-tracker" and
+        .id != "restrict-btpt-trackers" and
+        .id != "restrict-btpt-pt" and
+        .type != "restrict-cn" and
+        .type != "restrict-btpt" and
+        (.domains // "") != "geosite:tracker,geosite:public-tracker,geosite:private-tracker" and
+        (.domains // "") != "geosite:category-pt" and
+        (.domains // "") != "geosite:cn" and
+        (.domains // "") != "geoip:cn" and
+        (.domains // "") != "geosite:tracker" and
+        (.domains // "") != "geosite:public-tracker" and
+        (.domains // "") != "geosite:private-tracker"
+    )]' "$DB_FILE" > "$tmp" && mv "$tmp" "$DB_FILE"
+}
+
 disable_access_restriction() {
     db_del_routing_rule "restrict-cn" "by_type"
     db_del_routing_rule "restrict-btpt" "by_type"
-    local tmp=$(mktemp)
-    jq '.routing_rules = [.routing_rules[]? | select(.id != "restrict-cn-geosite" and .id != "restrict-cn-geoip" and .id != "restrict-btpt-trackers" and .id != "restrict-btpt-pt")]' "$DB_FILE" > "$tmp" && mv "$tmp" "$DB_FILE"
+    cleanup_legacy_access_restriction_rules
     _regenerate_proxy_configs
     _ok "访问限制已关闭"
     _pause
@@ -13043,12 +13065,12 @@ show_access_restriction_status() {
     local rules=$(db_get_routing_rules)
     local cn_enabled="否" bt_enabled="否"
     echo "$rules" | jq -e '.[] | select(.id == "restrict-cn-geosite" or .id == "restrict-cn-geoip" or .type == "restrict-cn")' >/dev/null 2>&1 && cn_enabled="是"
-    echo "$rules" | jq -e '.[] | select(.id == "restrict-btpt-trackers" or .id == "restrict-btpt-pt" or .type == "restrict-btpt")' >/dev/null 2>&1 && bt_enabled="是"
+    echo "$rules" | jq -e '.[] | select(.id == "restrict-btpt-tracker" or .id == "restrict-btpt-public-tracker" or .id == "restrict-btpt-private-tracker" or .type == "restrict-btpt")' >/dev/null 2>&1 && bt_enabled="是"
     echo -e "  禁止回国: ${G}${cn_enabled}${NC}"
     echo -e "  禁止 BT/PT: ${G}${bt_enabled}${NC}"
     echo ""
     echo -e "  ${D}当前预设规则:${NC}"
-    echo "$rules" | jq -r '.[] | select(.id == "restrict-cn-geosite" or .id == "restrict-cn-geoip" or .id == "restrict-btpt-trackers" or .id == "restrict-btpt-pt" or .type == "restrict-cn" or .type == "restrict-btpt") | "  • " + (.id // .type) + " -> " + .outbound + " (" + (.domains // "") + ")"' 2>/dev/null || true
+    echo "$rules" | jq -r '.[] | select(.id == "restrict-cn-geosite" or .id == "restrict-cn-geoip" or .id == "restrict-btpt-tracker" or .id == "restrict-btpt-public-tracker" or .id == "restrict-btpt-private-tracker" or .type == "restrict-cn" or .type == "restrict-btpt") | "  • " + (.id // .type) + " -> " + .outbound + " (" + (.domains // "") + ")"' 2>/dev/null || true
     _line
     read -rp "  按回车返回... " _
 }
@@ -13063,8 +13085,7 @@ enable_access_restriction() {
     echo ""
     read -rp "  确认启用? [Y/n]: " confirm
     [[ "$confirm" =~ ^[nN]$ ]] && return 0
-    local tmp=$(mktemp)
-    jq '.routing_rules = [.routing_rules[]? | select(.id != "restrict-cn-geosite" and .id != "restrict-cn-geoip" and .id != "restrict-btpt-trackers" and .id != "restrict-btpt-pt" and .type != "restrict-cn" and .type != "restrict-btpt")]' "$DB_FILE" > "$tmp" && mv "$tmp" "$DB_FILE"
+    cleanup_legacy_access_restriction_rules
     db_add_routing_rule "custom" "block" "geosite:cn" "as_is"
     python3 - "$DB_FILE" <<'PY2'
 import json,sys
@@ -13089,27 +13110,39 @@ for r in d.get('routing_rules',[]):
         break
 p.write_text(json.dumps(d,ensure_ascii=False,indent=2))
 PY2
-    db_add_routing_rule "custom" "block" "geosite:tracker,geosite:public-tracker,geosite:private-tracker" "as_is"
+    db_add_routing_rule "custom" "block" "geosite:tracker" "as_is"
     python3 - "$DB_FILE" <<'PY2'
 import json,sys
 from pathlib import Path
 p=Path(sys.argv[1])
 d=json.loads(p.read_text())
 for r in d.get('routing_rules',[]):
-    if r.get('domains')=='geosite:tracker,geosite:public-tracker,geosite:private-tracker' and r.get('outbound')=='block':
-        r['id']='restrict-btpt-trackers'
+    if r.get('domains')=='geosite:tracker' and r.get('outbound')=='block':
+        r['id']='restrict-btpt-tracker'
         break
 p.write_text(json.dumps(d,ensure_ascii=False,indent=2))
 PY2
-    db_add_routing_rule "custom" "block" "geosite:category-pt" "as_is"
+    db_add_routing_rule "custom" "block" "geosite:public-tracker" "as_is"
     python3 - "$DB_FILE" <<'PY2'
 import json,sys
 from pathlib import Path
 p=Path(sys.argv[1])
 d=json.loads(p.read_text())
 for r in d.get('routing_rules',[]):
-    if r.get('domains')=='geosite:category-pt' and r.get('outbound')=='block':
-        r['id']='restrict-btpt-pt'
+    if r.get('domains')=='geosite:public-tracker' and r.get('outbound')=='block':
+        r['id']='restrict-btpt-public-tracker'
+        break
+p.write_text(json.dumps(d,ensure_ascii=False,indent=2))
+PY2
+    db_add_routing_rule "custom" "block" "geosite:private-tracker" "as_is"
+    python3 - "$DB_FILE" <<'PY2'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1])
+d=json.loads(p.read_text())
+for r in d.get('routing_rules',[]):
+    if r.get('domains')=='geosite:private-tracker' and r.get('outbound')=='block':
+        r['id']='restrict-btpt-private-tracker'
         break
 p.write_text(json.dumps(d,ensure_ascii=False,indent=2))
 PY2
@@ -25288,7 +25321,14 @@ PY2
 realm_get_traffic_bytes() {
     local port="$1" proto="$2" chain="VLESS_REALM_COUNTERS"
     command -v iptables >/dev/null 2>&1 || { echo 0; return 0; }
-    iptables -nvx -L "$chain" 2>/dev/null | awk -v p="$port" -v proto="$proto" '$3==proto && $12=="dpt:"p {sum+=$2} END{print sum+0}'
+    iptables -nvx -L "$chain" 2>/dev/null | awk -v p="$port" -v proto="$proto" '
+        $0 ~ ("dpt:" p) {
+            for (i=1; i<=NF; i++) {
+                if ($i == proto) { sum += $2; break }
+            }
+        }
+        END { print sum+0 }
+    '
 }
 
 realm_ping_host() {
@@ -25312,7 +25352,30 @@ print(json.dumps(rules, ensure_ascii=False))
 PY2
 }
 
+realm_cleanup_runtime() {
+    command -v iptables >/dev/null 2>&1 && {
+        iptables -D INPUT -j VLESS_REALM_COUNTERS 2>/dev/null || true
+        iptables -F VLESS_REALM_COUNTERS 2>/dev/null || true
+        iptables -X VLESS_REALM_COUNTERS 2>/dev/null || true
+    }
+    if svc status "$REALM_SVC" 2>/dev/null; then
+        svc stop "$REALM_SVC" 2>/dev/null || true
+    else
+        systemctl stop "$REALM_SVC" 2>/dev/null || true
+    fi
+    svc disable "$REALM_SVC" 2>/dev/null || systemctl disable "$REALM_SVC" 2>/dev/null || true
+    pkill -x realm 2>/dev/null || true
+}
+
 realm_restart_service() {
+    ensure_realm_dir
+    local rule_count
+    rule_count=$(jq 'length' "$REALM_RULES_FILE" 2>/dev/null || echo 0)
+    if [[ "$rule_count" == "0" ]]; then
+        rm -f "$REALM_CONFIG_FILE" 2>/dev/null || true
+        realm_cleanup_runtime
+        return 0
+    fi
     realm_generate_config || return 1
     create_realm_service || return 1
     realm_sync_traffic_counters || true
@@ -25402,7 +25465,20 @@ realm_list_rules() {
     echo -e "  ${W}转发规则${NC}"
     _line
     [[ "$count" == "0" ]] && { echo -e "  ${D}暂无规则${NC}"; _line; return 0; }
-    jq -r 'to_entries[] | "\(.key+1)) \(.value.remark // \"未命名\")\n   后端: \(.value.backend)\n   协议: \(.value.transport)\n   监听: \(.value.listen_host):\(.value.listen_port)\n   目标: \(.value.remote_host):\(.value.remote_port)\n   状态: " + (if .value.enabled then "已启用" else "已禁用" end) + "\n"' "$REALM_RULES_FILE"
+    python3 - "$REALM_RULES_FILE" <<'PY2'
+import json, sys
+from pathlib import Path
+p=Path(sys.argv[1])
+rules=json.loads(p.read_text()) if p.exists() else []
+for i, r in enumerate(rules, 1):
+    print(f"{i}) {r.get('remark') or '未命名'}")
+    print(f"   后端: {r.get('backend','realm')}")
+    print(f"   协议: {r.get('transport','tcp')}")
+    print(f"   监听: {r.get('listen_host','0.0.0.0')}:{r.get('listen_port','')}")
+    print(f"   目标: {r.get('remote_host','')}:{r.get('remote_port','')}")
+    print(f"   状态: {'已启用' if r.get('enabled', True) else '已禁用'}")
+    print()
+PY2
     _line
 }
 
@@ -25463,22 +25539,20 @@ realm_status_logs_menu() {
         case "$choice" in
             1)
                 _header
-                echo -e "  ${W}Realm 服务状态${NC}"
+                echo -e "  ${W}转发状态${NC}"
                 _line
-                if [[ "$DISTRO" == "alpine" ]]; then
-                    rc-service "$REALM_SVC" status 2>/dev/null || true
-                else
-                    systemctl status "$REALM_SVC" --no-pager -l 2>/dev/null | sed -n '1,80p' || true
+                local service_state="未运行"
+                if svc status "$REALM_SVC" >/dev/null 2>&1 || systemctl is-active --quiet "$REALM_SVC" 2>/dev/null; then
+                    service_state="运行中"
+                elif pgrep -x realm >/dev/null 2>&1; then
+                    service_state="运行中"
                 fi
-                if ! svc status "$REALM_SVC" >/dev/null 2>&1; then
-                    echo -e "  ${Y}提示:${NC} 当前未发现脚本托管的 ${REALM_SVC} 服务，若仍有 realm 监听，可能是手工启动或遗留进程。"
-                fi
+                echo -e "  ${C}服务状态:${NC} ${G}${service_state}${NC}"
                 echo ""
-                echo -e "  ${Y}规则 / 流量 / Ping:${NC}"
                 local count idx remark transport listen_host listen_port remote_host remote_port enabled ping_value tcp_bytes udp_bytes total_bytes tcp_state udp_state
                 count=$(jq 'length' "$REALM_RULES_FILE" 2>/dev/null || echo 0)
                 if [[ "$count" == "0" ]]; then
-                    echo -e "  ${D}暂无规则${NC}"
+                    echo -e "  ${D}当前没有转发规则${NC}"
                 else
                     for idx in $(seq 0 $((count-1))); do
                         remark=$(jq -r '.['"$idx"'].remark // "未命名"' "$REALM_RULES_FILE")
@@ -25489,22 +25563,25 @@ realm_status_logs_menu() {
                         remote_port=$(jq -r ".[$idx].remote_port" "$REALM_RULES_FILE")
                         enabled=$(jq -r ".[$idx].enabled // true" "$REALM_RULES_FILE")
                         ping_value=$(realm_ping_host "$remote_host")
-                        [[ -z "$ping_value" ]] && ping_value="N/A"
+                        [[ -z "$ping_value" ]] && ping_value="超时/N/A"
                         tcp_bytes=$(realm_get_traffic_bytes "$listen_port" tcp)
                         udp_bytes=$(realm_get_traffic_bytes "$listen_port" udp)
                         total_bytes=$((tcp_bytes + udp_bytes))
-                        tcp_state=$(ss -lnt 2>/dev/null | awk -v p=":$listen_port" '$4 ~ p"$" {found=1} END{print found?"LISTEN":"-"}')
-                        udp_state=$(ss -lnu 2>/dev/null | awk -v p=":$listen_port" '$4 ~ p"$" {found=1} END{print found?"LISTEN":"-"}')
-                        echo -e "  ${C}$((idx+1)). ${remark}${NC}"
-                        echo -e "     规则: ${G}${listen_host}:${listen_port}${NC} -> ${G}${remote_host}:${remote_port}${NC}"
-                        echo -e "     协议: ${transport} | 状态: $( [[ "$enabled" == "true" ]] && echo 已启用 || echo 已禁用 ) | Ping: ${ping_value}"
-                        echo -e "     流量: TCP $(format_bytes "$tcp_bytes") / UDP $(format_bytes "$udp_bytes") / 总计 $(format_bytes "$total_bytes")"
-                        echo -e "     监听: TCP ${tcp_state} / UDP ${udp_state}"
+                        tcp_state=$(ss -lnt 2>/dev/null | awk -v p=":$listen_port" '$4 ~ p"$" {found=1} END{print found?"运行中":"-"}')
+                        udp_state=$(ss -lnu 2>/dev/null | awk -v p=":$listen_port" '$4 ~ p"$" {found=1} END{print found?"运行中":"-"}')
+                        echo -e "  ${Y}● ${remark}${NC}"
+                        echo -e "    规则      : ${G}${listen_host}:${listen_port}${NC} → ${G}${remote_host}:${remote_port}${NC}"
+                        echo -e "    状态      : $( [[ "$enabled" == "true" ]] && echo 运行中 || echo 已禁用 )"
+                        echo -e "    总流量    : $(format_bytes "$total_bytes")"
+                        echo -e "    TCP / UDP : $(format_bytes "$tcp_bytes") / $(format_bytes "$udp_bytes")"
+                        echo -e "    Ping      : ${ping_value}"
+                        echo -e "    监听端口  : ${listen_port}"
+                        echo -e "    监听状态  : TCP ${tcp_state} / UDP ${udp_state}"
+                        echo -e "    协议      : ${transport}"
                         echo ""
                     done
                 fi
-                echo -e "  ${Y}监听端口:${NC}"
-                ss -tulnp 2>/dev/null | grep realm || echo -e "  ${D}未检测到 realm 监听端口${NC}"
+                _line
                 _pause
                 ;;
             2)
