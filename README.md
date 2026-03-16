@@ -28,6 +28,18 @@ wget -O vless-server.sh https://raw.githubusercontent.com/Zyx0rx/vless-all-in-on
 
 - [Website Docs](https://docs.vaiox.de/)
 
+## Sing-box custom build for traffic stats
+
+Starting from **v3.5.2**, Sing-box user traffic statistics for **Hysteria2 / TUIC / AnyTLS** require a custom Sing-box build with `with_v2ray_api` enabled.
+
+The default upstream Sing-box binary usually does **not** include this capability.
+
+For users who need Sing-box traffic sync / quota / expiry workflows, download the custom Sing-box asset attached to the corresponding GitHub Release and replace your current `/usr/local/bin/sing-box` binary.
+
+A step-by-step installation note is provided in the release asset:
+
+- `README-sing-box-v2api.md`
+
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=Zyx0rx/vless-all-in-one&type=Date)](https://www.star-history.com/#Zyx0rx/vless-all-in-one&Date)
